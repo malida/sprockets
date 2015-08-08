@@ -1,5 +1,6 @@
 require 'sprockets/sassc_importer'
 require 'sprockets/sass_processor'
+require 'base64'
 
 module Sprockets
   class SasscProcessor < SassProcessor
@@ -23,6 +24,8 @@ module Sprockets
         syntax: self.class.syntax,
         load_paths:  input[:environment].paths,
         importer: @importer_class,
+        source_map_embed: true,
+        source_map_file: '.',
         sprockets: {
           context: context,
           environment: input[:environment],
@@ -32,9 +35,19 @@ module Sprockets
 
       engine = Autoload::SassC::Engine.new(input[:data], options)
 
-      css = Utils.module_include(Autoload::SassC::Script::Functions, @functions) do
+      data = Utils.module_include(Autoload::SassC::Script::Functions, @functions) do
         engine.render
       end
+
+      match_data = data.match(/(.*)\n\/\*# sourceMappingURL=data:application\/json;base64,(.+) \*\//m)
+      css, map = match_data[1], Base64.decode64(match_data[2])
+
+      map = SourceMapUtils.combine_source_maps(
+        input[:metadata][:map],
+        SourceMapUtils.decode_json_source_map(map)["mappings"]
+      )
+
+      { data: css, map: map }
 
       # Track all imported files
       sass_dependencies = Set.new([input[:filename]])
@@ -43,7 +56,7 @@ module Sprockets
         context.metadata[:dependencies] << URIUtils.build_file_digest_uri(dependency.options[:filename])
       end
 
-      context.metadata.merge(data: css, sass_dependencies: sass_dependencies)
+      context.metadata.merge(data: css, map: map, sass_dependencies: sass_dependencies)
     end
 
     module Functions
